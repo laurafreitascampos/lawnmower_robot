@@ -1,0 +1,17 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>mower_bringup</name>
+  <version>0.1.0</version>
+  <description>Launch files de alto nível: sobe a simulação completa ou o robô real</description>
+  <maintainer email="seu_email@exemplo.com">Seu Nome</maintainer>
+  <license>MIT</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <exec_depend>mower_description</exec_depend>
+  <exec_depend>mower_simulation</exec_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

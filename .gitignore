@@ -1,0 +1,29 @@
+# ROS2 / colcon build artifacts (NUNCA versionar)
+build/
+install/
+log/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.pytest_cache/
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Sistema
+.DS_Store
+Thumbs.db
+
+# Gazebo
+.gazebo/
+
+# Arquivos temporários
+*.tmp
+*.bak
+*.log
