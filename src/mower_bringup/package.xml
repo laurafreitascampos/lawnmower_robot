@@ -1,7 +1,7 @@
 <?xml version="1.0"?>
 <package format="3">
   <name>mower_bringup</name>
-  <version>0.1.0</version>
+  <version>0.2.0</version>
   <description>Launch files de alto nível: sobe a simulação completa ou o robô real</description>
   <maintainer email="seu_email@exemplo.com">Seu Nome</maintainer>
   <license>MIT</license>
@@ -10,6 +10,12 @@
 
   <exec_depend>mower_description</exec_depend>
   <exec_depend>mower_simulation</exec_depend>
+  <exec_depend>ros_gz_sim</exec_depend>
+  <exec_depend>ros_gz_bridge</exec_depend>
+  <exec_depend>robot_state_publisher</exec_depend>
+  <exec_depend>rviz2</exec_depend>
+  <exec_depend>xacro</exec_depend>
+  <exec_depend>teleop_twist_keyboard</exec_depend>
 
   <export>
     <build_type>ament_cmake</build_type>
