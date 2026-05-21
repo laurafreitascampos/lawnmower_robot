@@ -43,10 +43,12 @@ def generate_launch_description():
                 name="random_coverage",
                 output="screen",
                 parameters=[{
-                    "linear_speed": 0.3,
-                    "angular_speed": 1.0,
-                    "safety_distance": 0.6,
-                    "front_angle_deg": 60.0,
+                    "linear_speed": 0.4,
+                    "angular_speed": 1.2,
+                    "safety_distance": 0.05,
+                    "front_angle_deg": 30.0,
+		    "clear_distance": 0.3,
+		    "max_turn_time": 3.0,
                 }],
             )
         ]

@@ -1,21 +1,18 @@
 """
-Random Coverage Node - Lógica de cobertura aleatória pro robô cortador de grama.
+Random Coverage Node - V2 (corrigida)
 
-Estratégia (estilo Roomba antigo):
-  1. Anda pra frente em velocidade constante
-  2. Lê o tópico /scan (LiDAR LD19) continuamente
-  3. Se detectar obstáculo dentro de uma "zona de segurança" frontal:
-     a. Para o robô
-     b. Gira em direção oposta ao obstáculo
-     c. Volta a andar pra frente
-  4. Repete indefinidamente
+Estratégia:
+  1. FORWARD: anda pra frente, observando cone frontal estreito (40°)
+  2. Detecta obstáculo perto -> entra em TURNING
+  3. TURNING: gira UMA direção fixa enquanto vê obstáculo
+  4. Continua FORWARD assim que liberar
+  5. Tem timeout de segurança: se girar demais (>5s), tenta outra direção
 
-Após algum tempo, o robô cobre estatisticamente toda a área navegável.
-É o algoritmo de cobertura mais simples possível, mas funcional.
-
-Tópicos:
-  Inscreve em:  /scan       (sensor_msgs/LaserScan)
-  Publica em:   /cmd_vel    (geometry_msgs/Twist)
+Diferença pra V1:
+  - Cone de detecção mais estreito (40°) - só obstáculos mais "na cara"
+  - Durante TURNING, monitora LiDAR em tempo real, não por tempo
+  - Para de girar assim que abre caminho, não espera tempo aleatório
+  - Anti-loop: se girar mais de 5 segundos, inverte direção
 """
 
 import math
@@ -33,29 +30,28 @@ class RandomCoverageNode(Node):
         super().__init__('random_coverage')
 
         # ====== Parâmetros configuráveis ======
-        self.declare_parameter('linear_speed', 0.3)       # m/s ao andar pra frente
-        self.declare_parameter('angular_speed', 1.0)      # rad/s ao girar
-        self.declare_parameter('safety_distance', 0.6)    # metros, distância de "alarme"
-        self.declare_parameter('front_angle_deg', 60.0)   # ângulo do "cone frontal" a observar
+        self.declare_parameter('linear_speed', 0.3)
+        self.declare_parameter('angular_speed', 0.8)
+        self.declare_parameter('safety_distance', 0.5)     # 0.5m de distância
+        self.declare_parameter('front_angle_deg', 40.0)    # cone mais ESTREITO (40°)
+        self.declare_parameter('clear_distance', 0.8)      # distância pra considerar "livre"
+        self.declare_parameter('max_turn_time', 5.0)       # se girar mais que isso, inverte
 
         self.linear_speed = self.get_parameter('linear_speed').value
         self.angular_speed = self.get_parameter('angular_speed').value
         self.safety_distance = self.get_parameter('safety_distance').value
         self.front_angle_rad = math.radians(self.get_parameter('front_angle_deg').value)
+        self.clear_distance = self.get_parameter('clear_distance').value
+        self.max_turn_time = self.get_parameter('max_turn_time').value
 
         # ====== Estado da máquina ======
-        # FORWARD: andando reto
-        # TURNING: girando até abrir caminho
         self.state = 'FORWARD'
-        self.turn_direction = 1.0    # 1.0 = esquerda, -1.0 = direita
-        self.turn_end_time = None
+        self.turn_direction = 1.0
+        self.turn_start_time = None
 
-        # ====== Publisher pro tópico de comando ======
+        # ====== Pub/Sub ======
         self.cmd_pub = self.create_publisher(Twist, '/cmd_vel', 10)
 
-        # ====== Subscriber pro LiDAR ======
-        # QoS BEST_EFFORT é importante pra LiDAR no Gazebo
-        # (o plugin publica em best_effort por padrão)
         lidar_qos = QoSProfile(
             reliability=ReliabilityPolicy.BEST_EFFORT,
             history=HistoryPolicy.KEEP_LAST,
@@ -65,126 +61,108 @@ class RandomCoverageNode(Node):
             LaserScan, '/scan', self.scan_callback, lidar_qos
         )
 
-        # ====== Timer pra publicar comandos a 10Hz ======
         self.timer = self.create_timer(0.1, self.control_loop)
-
-        # Última leitura do LiDAR (None até receber a primeira)
         self.latest_scan = None
 
-        self.get_logger().info('=== Random Coverage iniciado ===')
+        self.get_logger().info('=== Random Coverage V2 iniciado ===')
         self.get_logger().info(f'Vel linear: {self.linear_speed} m/s')
-        self.get_logger().info(f'Vel angular: {self.angular_speed} rad/s')
         self.get_logger().info(f'Distância de segurança: {self.safety_distance} m')
+        self.get_logger().info(f'Distância de livre: {self.clear_distance} m')
+        self.get_logger().info(f'Cone frontal: {self.get_parameter("front_angle_deg").value}°')
 
     def scan_callback(self, msg: LaserScan):
-        """Armazena a última leitura do LiDAR."""
         self.latest_scan = msg
 
     def get_min_distance_in_front(self):
-        """
-        Olha o LiDAR e retorna a menor distância dentro do cone frontal.
+            """Retorna (distancia_minima, lado_mais_proximo) dentro do cone frontal."""
+            if self.latest_scan is None:
+                return float('inf'), 'left'
 
-        O LiDAR do nosso robô (LD19) faz scan 360 graus, começando atrás (-pi)
-        e indo até atrás de novo (+pi). O ponto 0 rad é "frente do robô".
+            ranges = self.latest_scan.ranges
+            angle_min = self.latest_scan.angle_min
+            angle_increment = self.latest_scan.angle_increment
 
-        Retorna (distancia_mínima, lado_mais_próximo)
-          lado_mais_próximo: 'left' ou 'right' (pra decidir pra onde girar)
-        """
-        if self.latest_scan is None:
-            return float('inf'), 'left'
+            # IMPORTANTE: ignora leituras dentro do próprio chassi do robô
+            # Chassi tem 40cm de comprimento, então qualquer leitura < 25cm
+            # provavelmente é o próprio robô (o LiDAR está no centro do chassi)
+            MIN_VALID_RANGE = 0.25
 
-        ranges = self.latest_scan.ranges
-        angle_min = self.latest_scan.angle_min
-        angle_increment = self.latest_scan.angle_increment
+            min_dist = float('inf')
+            min_dist_angle = 0.0
 
-        min_dist = float('inf')
-        min_dist_angle = 0.0
+            for i, r in enumerate(ranges):
+                angle = angle_min + i * angle_increment
 
-        # Itera por todos os feixes do scan
-        for i, r in enumerate(ranges):
-            # Calcula o ângulo deste feixe
-            angle = angle_min + i * angle_increment
+                # Só considera feixes no cone frontal
+                if abs(angle) > self.front_angle_rad / 2.0:
+                    continue
 
-            # Só considera feixes dentro do cone frontal
-            if abs(angle) > self.front_angle_rad / 2.0:
-                continue
+                # Filtra valores inválidos
+                if not math.isfinite(r):
+                    continue
+                if r < self.latest_scan.range_min or r > self.latest_scan.range_max:
+                    continue
 
-            # Ignora leituras inválidas (inf, NaN, ou fora do range do sensor)
-            if not math.isfinite(r):
-                continue
-            if r < self.latest_scan.range_min or r > self.latest_scan.range_max:
-                continue
+                # NOVO: ignora leituras dentro do raio do próprio robô
+                if r < MIN_VALID_RANGE:
+                    continue
 
-            if r < min_dist:
-                min_dist = r
-                min_dist_angle = angle
+                if r < min_dist:
+                    min_dist = r
+                    min_dist_angle = angle
 
-        # Determina lado: ângulo positivo é esquerda, negativo é direita
-        # (convenção ROS: x pra frente, y pra esquerda)
-        side = 'left' if min_dist_angle > 0 else 'right'
-
-        return min_dist, side
+            side = 'left' if min_dist_angle > 0 else 'right'
+            return min_dist, side
 
     def control_loop(self):
-        """Chamado 10x por segundo - decide o que o robô deve fazer."""
         if self.latest_scan is None:
-            # Ainda não chegou nenhum scan, espera
             return
 
         cmd = Twist()
+        min_dist, closest_side = self.get_min_distance_in_front()
+        now = self.get_clock().now().nanoseconds * 1e-9
 
-        # ====== Lógica da máquina de estados ======
         if self.state == 'FORWARD':
-            min_dist, closest_side = self.get_min_distance_in_front()
-
             if min_dist < self.safety_distance:
-                # Obstáculo detectado, transiciona pra TURNING
-                self.get_logger().info(
-                    f'Obstáculo a {min_dist:.2f}m no lado {closest_side}, girando...'
-                )
-
-                # Gira na direção OPOSTA ao obstáculo
-                # (se obstáculo está na esquerda, gira pra direita, e vice-versa)
+                # Detectou obstáculo, começa a girar
                 self.turn_direction = -1.0 if closest_side == 'left' else 1.0
-
-                # Duração aleatória do giro entre 0.8 e 2.0 segundos
-                # Isso faz com que o robô explore aleatoriamente
-                turn_duration = random.uniform(0.8, 2.0)
-                self.turn_end_time = self.get_clock().now().nanoseconds * 1e-9 + turn_duration
-
+                self.turn_start_time = now
                 self.state = 'TURNING'
-                # Não anda nesse ciclo (já vai começar a girar no próximo)
+                self.get_logger().info(
+                    f'Obstáculo a {min_dist:.2f}m ({closest_side}), '
+                    f'girando pra {"direita" if self.turn_direction < 0 else "esquerda"}...'
+                )
+                # Não anda nesse ciclo
                 cmd.linear.x = 0.0
                 cmd.angular.z = 0.0
             else:
-                # Caminho livre, anda pra frente
+                # Tudo livre, segue em frente
                 cmd.linear.x = self.linear_speed
                 cmd.angular.z = 0.0
 
         elif self.state == 'TURNING':
-            now = self.get_clock().now().nanoseconds * 1e-9
-
-            if now >= self.turn_end_time:
-                # Tempo de giro acabou, verifica se desbloqueou
-                min_dist, _ = self.get_min_distance_in_front()
-
-                if min_dist >= self.safety_distance:
-                    # Caminho livre, volta a andar
-                    self.get_logger().info(f'Caminho livre ({min_dist:.2f}m), seguindo...')
-                    self.state = 'FORWARD'
-                    cmd.linear.x = self.linear_speed
-                    cmd.angular.z = 0.0
-                else:
-                    # Ainda bloqueado, gira mais um pouco
-                    self.turn_end_time = now + random.uniform(0.5, 1.5)
-                    cmd.linear.x = 0.0
-                    cmd.angular.z = self.turn_direction * self.angular_speed
+            # Verifica caminho em TEMPO REAL (não espera tempo passar)
+            if min_dist >= self.clear_distance:
+                # Caminho livre! Volta a andar
+                self.state = 'FORWARD'
+                self.get_logger().info(f'Caminho livre ({min_dist:.2f}m), seguindo...')
+                cmd.linear.x = self.linear_speed
+                cmd.angular.z = 0.0
             else:
-                # Ainda girando
+                # Ainda bloqueado, continua girando
+                elapsed = now - self.turn_start_time
+
+                # Anti-loop: se girou tempo demais, inverte direção
+                if elapsed > self.max_turn_time:
+                    self.turn_direction *= -1.0
+                    self.turn_start_time = now
+                    self.get_logger().warn(
+                        f'Girou {self.max_turn_time}s sem desobstruir, invertendo direção'
+                    )
+
                 cmd.linear.x = 0.0
                 cmd.angular.z = self.turn_direction * self.angular_speed
 
-        # Publica o comando
         self.cmd_pub.publish(cmd)
 
 
@@ -196,7 +174,6 @@ def main():
     except KeyboardInterrupt:
         pass
     finally:
-        # Antes de fechar, manda velocidade zero pro robô parar
         cmd = Twist()
         node.cmd_pub.publish(cmd)
         node.destroy_node()

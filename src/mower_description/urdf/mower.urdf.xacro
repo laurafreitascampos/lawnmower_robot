@@ -161,7 +161,7 @@
     <parent link="base_link"/>
     <child link="lidar_link"/>
     <!-- LiDAR montado no centro do chassi, 5cm acima do topo -->
-    <origin xyz="0 0 ${chassis_height + 0.05}" rpy="0 0 0"/>
+    <origin xyz="0 0 ${chassis_height + 0.10}" rpy="0 0 0"/>
   </joint>
 
   <!-- ============ PLUGINS GAZEBO ============ -->
