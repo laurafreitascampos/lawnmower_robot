@@ -28,6 +28,7 @@ from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration, Command, PathJoinSubstitution
 from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
+from launch_ros.parameter_descriptions import ParameterValue
 from ament_index_python.packages import get_package_share_directory
 
 
@@ -49,7 +50,7 @@ def generate_launch_description():
     # O 'Command' chama o executável xacro e captura sua saída como string,
     # que vai ser o conteúdo do parâmetro robot_description.
     robot_description_content = Command(["xacro ", urdf_file])
-    robot_description = {"robot_description": robot_description_content}
+    robot_description = {"robot_description": ParameterValue(robot_description_content, value_type=str)}
 
     # ====== Robot State Publisher ======
     # Publica as transformações TF baseadas no URDF.
